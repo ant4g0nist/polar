@@ -9,6 +9,7 @@ At the moment, it can ask `davinci-003` to explain what the current disassembly 
 ```
 curl -OL https://raw.githubusercontent.com/ant4g0nist/polar/master/polar.py
 mv polar.py ~/polar.py
+pip3 install capstone openai
 echo command script import ~/polar.py >> ~/.lldbinit
 ```
 
