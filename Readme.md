@@ -9,7 +9,7 @@ At the moment, it can ask `davinci-003` to explain what the current disassembly 
 ```
 curl -OL https://raw.githubusercontent.com/ant4g0nist/polar/master/polar.py
 mv polar.py ~/polar.py
-pip3 install capstone openai
+pip3 install capstone openai Pygments
 echo command script import ~/polar.py >> ~/.lldbinit
 ```
 
@@ -22,6 +22,7 @@ export OPENAI_API_KEY=<your openai api token here>.
 ```
 lldb
 (lldb) help explain
+(lldb) help decompile
 ```
 
 ![explain0x0](./explain0x0.png)

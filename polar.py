@@ -23,6 +23,14 @@ import optparse
 import platform
 import functools
 import subprocess
+import textwrap
+from pprint import pformat
+
+from pygments import highlight
+from pygments.formatters import Terminal256Formatter
+from pygments.lexers.c_cpp import CLexer
+from pygments.lexers import Python3Lexer
+from functools import lru_cache
 
 # Set your API key in the OPENAI_API_KEY environment variable.
 api_key = os.getenv("OPENAI_API_KEY")
@@ -3213,6 +3221,9 @@ class X8664(Architecture):
 		print("$rip : 0x%016x"%(get_register("rip", frame)))
 		print("flags: 0x%016x"%(get_register("rflags", frame)))
 		
+def pprint_color(obj: string) -> None:
+	"""Pretty-print in color."""
+	print(highlight(obj, CLexer(), Terminal256Formatter()))
 
 #################################################################################
 ############################ COMMANDS ###########################################
@@ -3229,6 +3240,58 @@ def process_is_alive(f):
 			warnlog("Target is not running :( ")
 	return wrapper
 
+
+class DecompileCommand(LLDBCommand):
+	
+	def name(self):
+		return "decompile"
+	
+	def description(self):
+		return "Decompile current function in the frame powered by ChatGPT"
+	
+	def args(self):
+		return [
+			CommandArgument(
+				arg="force",
+				type="bool",
+				help="Force clear lru cache and force re-request from ChatGPT",
+				default=False
+			),
+		]
+
+	@process_is_alive
+	def run(self, arguments, option):
+		target 	= lldb.debugger.GetSelectedTarget()
+		process = target.GetProcess()
+		thread 	= process.GetSelectedThread()
+		frame 	= thread.GetSelectedFrame()
+
+		disassembly, error = run_command_return_output("disassemble")
+
+		if error:
+			errlog("Failed to decompile")
+			return
+
+		ansi_escape = re.compile(r'''
+	\x1B  # ESC
+	(?:   # 7-bit C1 Fe (except CSI)
+		[@-Z\\-_]
+	|     # or [ for CSI, followed by a control sequence
+		\[
+		[0-?]*  # Parameter bytes
+		[ -/]*  # Intermediate bytes
+		[@-~]   # Final byte
+	)
+	''', re.VERBOSE)
+		disassembly = ansi_escape.sub('', disassembly)
+
+		prompt = f"Can you give decompiled code for the following assembly. I want the reply in a code block and nothing else. Do not give explanations. ```{disassembly}```"
+
+		if arguments[1]:
+			query_model.cache_clear()
+
+		output = query_model(prompt, highlight=True)
+		pprint_color(output)
 
 class InstructionManualCommand(LLDBCommand):
 	
@@ -3252,26 +3315,6 @@ class InstructionManualCommand(LLDBCommand):
 			)
 		]
 
-	def cleanInstruction(self, arch, inst):
-		# mneminic
-		if arch == "x86_64":
-			inst = inst.upper()
-			# hacks for x86
-			if inst[0:1] == "J" and inst != "JMP":
-				inst = "Jcc"
-			elif inst[0:4] == "LOOP":
-				inst = "LOOP"
-			elif inst[0:3] == "INT":
-				inst = "INT n"
-			elif inst[0:5] == "FCMOV":
-				inst = "FCMOVcc"
-			elif inst[0:4] == "CMOV":
-				inst = "CMOVcc"
-			elif inst[0:3] == "SET":
-				inst = "SETcc"
-
-		return inst
-
 	@process_is_alive
 	def run(self, arguments, option):
 		target 	= lldb.debugger.GetSelectedTarget()
@@ -3285,7 +3328,7 @@ class InstructionManualCommand(LLDBCommand):
 		if not address:
 			address = frame.pc
 			disassembly = frame.disassembly
-			query_model(f"Can you explain what the following Assembly code does and suggest a name for it?\n{disassembly}")
+			print(query_model(f"Can you explain what the following Assembly code does and suggest a name for it?\n{disassembly}"))
 		else:
 			arch = get_target_arch().mode
 			tarch = get_target_arch()
@@ -3298,15 +3341,16 @@ class InstructionManualCommand(LLDBCommand):
 				instruction = "0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
 				instructions += "\n0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
 
-			query_model(f"Can you explain what the following Assembly code does and suggest a name for it?{instructions}")
+			print(query_model(f"Can you explain what the following Assembly code does and suggest a name for it?{instructions}"))
+
 
 # openAI
-def query_model(query, max_tokens=1000):
+@lru_cache
+def query_model(query, max_tokens=2500, highlight=False):
 	"""
 	This function sends a query to davinci-003 and prints the response if available.
 	"""
 	try:
-		dlog(query)
 		response = openai.Completion.create(
 			model="text-davinci-003",
 			prompt=query,
@@ -3317,13 +3361,29 @@ def query_model(query, max_tokens=1000):
 			presence_penalty=1,
 			timeout=60
 		)
-		print(response.choices[0].text[1:])
+
+		return response.choices[0].text[1:]
+
+	except openai.InvalidRequestError as e:
+		# Context length exceeded. Determine the max number of tokens we can ask for and retry.
+		m = re.search(r'maximum context length is (\d+) tokens, however you requested \d+ tokens \((\d+) in your '
+						r'prompt;', str(e))
+		if not m:
+			errlog(f"davinci-003 could not complete the request: {str(e)}")
+			return
+
+		(hard_limit, prompt_tokens) = (int(m.group(1)), int(m.group(2)))
+		max_tokens = hard_limit - prompt_tokens
+		if max_tokens >= 750:
+			return query_model(query, max_tokens, highlight)
+		else:
+			errlog("Unfortunately, this function is too big to be analyzed with the model's current API limits.")
 
 	except openai.OpenAIError as e:
-		print(f"davinci-003 could not complete the request: {str(e)}")
+		errlog(f"davinci-003 could not complete the request: {str(e)}")
 
 	except Exception as e:
-		print(f"Exception encountered while running the query: {str(e)}")
+		errlog(f"Exception encountered while running the query: {str(e)}")
 
 def __lldb_init_module(debugger, dict):
 	context_title(" polar ")
@@ -3346,6 +3406,4 @@ def __lldb_init_module(debugger, dict):
 	current_module._loadedFunctions = {}
 
 	load_command(current_module, InstructionManualCommand(), "lisa")
-
-	command_iterpreter.HandleCommand("target stop-hook add --one-liner 'context'", res)
-	command_iterpreter.HandleCommand("command alias ct context", res)
+	load_command(current_module, DecompileCommand(), "lisa")
