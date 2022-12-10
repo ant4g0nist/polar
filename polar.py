@@ -3252,6 +3252,11 @@ class DecompileCommand(LLDBCommand):
 	def args(self):
 		return [
 			CommandArgument(
+				arg="function name",
+				type="str",
+				help="Function to decompile. Pass 0 to use the decompile the current function",
+			),
+			CommandArgument(
 				arg="force",
 				type="bool",
 				help="Force clear lru cache and force re-request from ChatGPT",
@@ -3261,12 +3266,11 @@ class DecompileCommand(LLDBCommand):
 
 	@process_is_alive
 	def run(self, arguments, option):
-		target 	= lldb.debugger.GetSelectedTarget()
-		process = target.GetProcess()
-		thread 	= process.GetSelectedThread()
-		frame 	= thread.GetSelectedFrame()
+		if arguments[0]:
+			disassembly, error = run_command_return_output(f"disassemble -n {arguments[0]}")
 
-		disassembly, error = run_command_return_output("disassemble")
+		else:
+			disassembly, error = run_command_return_output("disassemble -f")
 
 		if error:
 			errlog("Failed to decompile")
