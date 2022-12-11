@@ -3,7 +3,7 @@ LLDB plugin which queries OpenAI's davinci-003 language model to speed up revers
 
 At the moment, it can ask `davinci-003` to explain what the current disassembly does. Here is a simple example of what results it can provide:
 
-![Sample](./explain0x1.png) 
+![Sample](./imgs/explain0x1.png) 
 
 ## Usage
 ```
@@ -25,12 +25,13 @@ lldb
 (lldb) help decompile
 ```
 
-![explain0x0](./explain0x0.png)
+![explain0x0](./imgs/explain0x0.png)
 
+![decompile0x1](./imgs/decompile0x1.png)
 
-### Example:
+## Example:
 
-![Sample](./explain0x1.png) 
+![Sample](./imgs/explain0x1.png) 
 
 
 ## Acknowledgements
