@@ -1,0 +1,10 @@
+target create ./examples/cpp_crash
+breakpoint set -n main
+breakpoint set -n foo1
+run
+decompile
+c
+decompile
+suggest
+c
+exit

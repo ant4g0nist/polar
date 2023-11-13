@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import io
 import os
 import re
@@ -29,11 +32,41 @@ from pprint import pformat
 from pygments import highlight
 from pygments.formatters import Terminal256Formatter
 from pygments.lexers.c_cpp import CLexer
-from pygments.lexers import Python3Lexer
 from functools import lru_cache
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.embeddings import LocalAIEmbeddings
+from langchain.embeddings import LlamaCppEmbeddings
+from langchain.llms import Ollama
+
 
 # Set your API key in the OPENAI_API_KEY environment variable.
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY") or "sk-"
+
+# choose between local or openai
+channel = os.getenv("LISA_CHANNEL") or "ollama" # "openai" or "local" or "ollama"
+# localAiModel = "gpt4all-j"
+ollamaModel = os.getenv("LISA_OLLAMA_MODEL") or "codellama" #"llama2"
+
+# Prompt
+
+decompile_prompt = """\
+This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can decompile and provide pseudo C-code for the given disassembly ARM64, X86_64 architecuteres. Do not provide explanation for the decompiled pseudo code. Try and decompile as much as possible and bring to a higher level C-language.\
+
+User: Hello, please decompile this {architecture} binary for me.\ Here's the disassembly: {disassembly}\
+"""
+
+disassembly_explanation_prompt = """\
+This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can decompile and provide pseudo C-code for the given disassembly ARM64, X86_64 architecuteres. Do not provide explanation for the decompiled pseudo code. Try and decompile as much as possible and bring to a higher level C-language.\
+
+User: Hello, please explain this disassembly from a {architecture} binary for me. Here's the disassembly: {disassembly}\
+"""
+
+function_name_suggestion_prompt = """\
+This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can read the provided disassembly and suggest a highlevel function name that explains what the given disassembly does. This disassembly could be in ARM64, X86_64 architecuteres. Please provide a valid reason why you suggested the function name using atmost 100 words. \
+
+User: Hello, please suggest a function name for disassembly from a {architecture} binary for me. Here's the disassembly: {disassembly}\
+"""
 
 BLK = "\033[30m"
 BLU = "\033[34m"
@@ -3294,8 +3327,9 @@ class DecompileCommand(LLDBCommand):
 		if arguments[1]:
 			query_model.cache_clear()
 
-		output = query_model(prompt, highlight=True)
-		pprint_color(output)
+		arch = get_target_arch()
+		prompt = createDecompilePrompt(arch, disassembly)
+		pprint_color(query_model(prompt, highlight=True))
 
 class InstructionManualCommand(LLDBCommand):
 	
@@ -3332,9 +3366,11 @@ class InstructionManualCommand(LLDBCommand):
 		if not address:
 			address = frame.pc
 			disassembly = frame.disassembly
-			print(query_model(f"Can you explain what the following Assembly code does and suggest a name for it?\n{disassembly}"))
+			arch = get_target_arch()
+			prompt = createDisassemblyExplanationPrompt(arch, disassembly)
+			pprint_color(query_model(prompt, highlight=True))
 		else:
-			arch = get_target_arch().mode
+			arch = get_target_arch()
 			tarch = get_target_arch()
 			size = int(size, 16)
 			instructions = ""
@@ -3344,61 +3380,112 @@ class InstructionManualCommand(LLDBCommand):
 				insn = _instructions[0]
 				instruction = "0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
 				instructions += "\n0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
+			
+			prompt = createDisassemblyExplanationPrompt(arch, instructions)
+			pprint_color(query_model(prompt, highlight=True))
 
-			print(query_model(f"Can you explain what the following Assembly code does and suggest a name for it?{instructions}"))
+class FunctionNameSuggestionCommand(LLDBCommand):
+	
+	def name(self):
+		return "suggest"
+	
+	def description(self):
+		return "Suggestions for function name for the current function powered by ChatGPT"
+	
+	def args(self):
+		return [
+			CommandArgument(
+				arg="address",
+				type="str",
+				help="address to disassemble using Capstone",
+			),
+			CommandArgument(
+				arg="size",
+				type="str",
+				help="Size of the buffer to read and disassemble using Capstone",
+			)
+		]
 
+	@process_is_alive
+	def run(self, arguments, option):
+		target 	= lldb.debugger.GetSelectedTarget()
+		process = target.GetProcess()
+		thread 	= process.GetSelectedThread()
+		frame 	= thread.GetSelectedFrame()
+
+		address = arguments[0]
+		size    = arguments[1]
+
+		if not address:
+			arch = get_target_arch()
+			address = frame.pc
+			disassembly = frame.disassembly
+			prompt = createFunctionNameSuggestionPrompt(arch, disassembly)
+			pprint_color(query_model(prompt, highlight=True))
+		else:
+			arch = get_target_arch()
+			tarch = get_target_arch()
+			size = int(size, 16)
+			instructions = ""
+			_instructions = list(tarch.get_disas(frame, process, pc=int(address, 16), size=size))
+
+			if _instructions:
+				insn = _instructions[0]
+				instructions += "\n0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
+
+			prompt = createFunctionNameSuggestionPrompt(arch, instructions)
+			pprint_color(query_model(prompt, highlight=True))
 
 # openAI
 @lru_cache
-def query_model(query, max_tokens=2500, highlight=False):
+def query_model(prompt, max_tokens=2500, highlight=False):
 	"""
 	This function sends a query to davinci-003 and prints the response if available.
 	"""
 	try:
-		response = openai.Completion.create(
-			model="text-davinci-003",
-			prompt=query,
-			temperature=0.6,
-			max_tokens=max_tokens,
-			top_p=1,
-			frequency_penalty=1,
-			presence_penalty=1,
-			timeout=60
-		)
-
-		return response.choices[0].text[1:]
-
-	except openai.InvalidRequestError as e:
-		# Context length exceeded. Determine the max number of tokens we can ask for and retry.
-		m = re.search(r'maximum context length is (\d+) tokens, however you requested \d+ tokens \((\d+) in your '
-						r'prompt;', str(e))
-		if not m:
-			errlog(f"davinci-003 could not complete the request: {str(e)}")
-			return
-
-		(hard_limit, prompt_tokens) = (int(m.group(1)), int(m.group(2)))
-		max_tokens = hard_limit - prompt_tokens
-		if max_tokens >= 750:
-			return query_model(query, max_tokens, highlight)
-		else:
-			errlog("Unfortunately, this function is too big to be analyzed with the model's current API limits.")
-
-	except openai.OpenAIError as e:
-		errlog(f"davinci-003 could not complete the request: {str(e)}")
+		if channel=="local":
+			return llm.embed_query(prompt)
+		elif channel=="ollama":
+			return llm(prompt)
+		elif channel=="openai":
+			return llm.invoke(prompt).content
 
 	except Exception as e:
 		errlog(f"Exception encountered while running the query: {str(e)}")
 
+def create_ai(ai, openai_api_key: str):
+    if ai=="local":
+        return LocalAIEmbeddings(
+            openai_api_base="http://localhost:8080", model=localAiModel, openai_api_key=openai_api_key
+            )
+    elif ai=="ollama":
+        return Ollama(model=ollamaModel)
+    else:
+        if openai_api_key:
+            return ChatOpenAI(openai_api_base="http://localhost:3001", openai_api_key=openai_api_key)
+        else:
+            return LlamaCppEmbeddings(model_path="/Users/ant4g0nist/Desktop/Projects/LLM/llama-gpt/models/llama-2-7b-chat.bin")
+
+def createDecompilePrompt(architecture: str, disassembly: str):
+    prompt = PromptTemplate.from_template(decompile_prompt)
+    return prompt.format(architecture=architecture, disassembly=disassembly)
+    
+def createDisassemblyExplanationPrompt(architecture: str, disassembly: str):
+    prompt = PromptTemplate.from_template(disassembly_explanation_prompt)
+    return prompt.format(architecture=architecture, disassembly=disassembly)
+
+def createFunctionNameSuggestionPrompt(architecture: str, disassembly: str):
+    prompt = PromptTemplate.from_template(function_name_suggestion_prompt)
+    return prompt.format(architecture=architecture, disassembly=disassembly)
+
+
 def __lldb_init_module(debugger, dict):
 	context_title(" polar ")
 
+	global llm
 	global command_iterpreter
 
-	if not api_key:
-		errlog("Please set OPENAI_API_KEY environment variable")
-		return
-	
-	openai.api_key = api_key
+	llm = create_ai(channel, api_key)
 
 	res = lldb.SBCommandReturnObject()
 	command_iterpreter = debugger.GetCommandInterpreter()
@@ -3409,5 +3496,6 @@ def __lldb_init_module(debugger, dict):
 	current_module = sys.modules[__name__]
 	current_module._loadedFunctions = {}
 
+	load_command(current_module, FunctionNameSuggestionCommand(), "lisa")
 	load_command(current_module, InstructionManualCommand(), "lisa")
 	load_command(current_module, DecompileCommand(), "lisa")
