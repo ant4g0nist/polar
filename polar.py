@@ -63,7 +63,7 @@ User: Hello, please explain this disassembly from a {architecture} binary for me
 """
 
 function_name_suggestion_prompt = """\
-This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can read the provided disassembly and suggest a highlevel function name that explains what the given disassembly does. This disassembly could be in ARM64, X86_64 architecuteres. Please provide a valid reason why you suggested the function name using atmost 100 words. \
+This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can read the provided disassembly and suggest a function name that suits what the given disassembly does. This disassembly could be in ARM64, X86_64 architecuteres. Please provide a valid reason why you suggested the function name using atmost 100 words. \
 
 User: Hello, please suggest a function name for disassembly from a {architecture} binary for me. Here's the disassembly: {disassembly}\
 """
