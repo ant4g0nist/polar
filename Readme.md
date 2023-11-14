@@ -76,13 +76,12 @@ lldb
 
 ## TODO
 - [x] Add support for Langchain for Ollama
-- [ ] Add config file support
 - [ ] Extend !exploitable command to use AI for analysis
 
 ## Acknowledgements
 
 - Thanks to [JusticeRage](https://twitter.com/JusticeRage) for [Gepetto](https://github.com/JusticeRage/Gepetto)
-- Thanks to [OpenAI](https://openai.com) for making this incredible bot
+- Thanks to [Ollama](https://github.com/jmorganca/ollama), Meta for llama2/codelama, [OpenAI](https://openai.com)
 - [lldb](https://lldb.llvm.org/)
 - [lisa.py](https://github.com/ant4g0nist/lisa.py)
 
