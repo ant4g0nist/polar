@@ -38,14 +38,23 @@ from langchain.prompts import PromptTemplate
 from langchain.embeddings import LocalAIEmbeddings
 from langchain.embeddings import LlamaCppEmbeddings
 from langchain.llms import Ollama
+from openai import OpenAI
 
 
 # Set your API key in the OPENAI_API_KEY environment variable.
 api_key = os.getenv("OPENAI_API_KEY") or "sk-"
 
+# Set your API key in the OPENAI_API_KEY environment variable to use speak.
+speak = os.getenv("LISA_SPEAK") or "false"
+if speak == "true":
+	openai.api_key = api_key
+	speak = True
+else:
+	speak = False
+
 # choose between local or openai
 channel = os.getenv("LISA_CHANNEL") or "ollama" # "openai" or "local" or "ollama"
-# localAiModel = "gpt4all-j"
+localAiModel = "gpt4all-j"
 ollamaModel = os.getenv("LISA_OLLAMA_MODEL") or "codellama" #"llama2"
 
 # Prompt
@@ -57,7 +66,7 @@ User: Hello, please decompile this {architecture} binary for me.\ Here's the dis
 """
 
 disassembly_explanation_prompt = """\
-This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can decompile and provide pseudo C-code for the given disassembly ARM64, X86_64 architecuteres. Do not provide explanation for the decompiled pseudo code. Try and decompile as much as possible and bring to a higher level C-language.\
+This is a AI powered debugger working with a security engineer reverse engineering and malware analysis. You can decompile and provide pseudo C-code for the given disassembly ARM64, X86_64 architecuteres. Do not provide explanation for the decompiled pseudo code. Try and decompile as much as possible and bring to a higher level C-language. Keep it to 400 words max.\
 
 User: Hello, please explain this disassembly from a {architecture} binary for me. Here's the disassembly: {disassembly}\
 """
@@ -3329,7 +3338,9 @@ class DecompileCommand(LLDBCommand):
 
 		arch = get_target_arch()
 		prompt = createDecompilePrompt(arch, disassembly)
-		pprint_color(query_model(prompt, highlight=True))
+		op = query_model(prompt, highlight=True)
+		pprint_color(op)
+		speakTheText(op)
 
 class InstructionManualCommand(LLDBCommand):
 	
@@ -3363,12 +3374,16 @@ class InstructionManualCommand(LLDBCommand):
 		address = arguments[0]
 		size    = arguments[1]
 
+		op = ""
 		if not address:
 			address = frame.pc
 			disassembly = frame.disassembly
 			arch = get_target_arch()
 			prompt = createDisassemblyExplanationPrompt(arch, disassembly)
-			pprint_color(query_model(prompt, highlight=True))
+			op = query_model(prompt, highlight=True)
+			pprint_color(op)
+			speakTheText(op)
+
 		else:
 			arch = get_target_arch()
 			tarch = get_target_arch()
@@ -3382,7 +3397,10 @@ class InstructionManualCommand(LLDBCommand):
 				instructions += "\n0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
 			
 			prompt = createDisassemblyExplanationPrompt(arch, instructions)
-			pprint_color(query_model(prompt, highlight=True))
+			op = query_model(prompt, highlight=True)
+
+			pprint_color(op)
+			speakTheText(op)
 
 class FunctionNameSuggestionCommand(LLDBCommand):
 	
@@ -3421,7 +3439,10 @@ class FunctionNameSuggestionCommand(LLDBCommand):
 			address = frame.pc
 			disassembly = frame.disassembly
 			prompt = createFunctionNameSuggestionPrompt(arch, disassembly)
-			pprint_color(query_model(prompt, highlight=True))
+			op = query_model(prompt, highlight=True)
+			pprint_color(op)
+			speakTheText(op)
+
 		else:
 			arch = get_target_arch()
 			tarch = get_target_arch()
@@ -3434,7 +3455,9 @@ class FunctionNameSuggestionCommand(LLDBCommand):
 				instructions += "\n0x%x:\t%s\t%s" %(insn.address, insn.mnemonic, insn.op_str)
 
 			prompt = createFunctionNameSuggestionPrompt(arch, instructions)
-			pprint_color(query_model(prompt, highlight=True))
+			op = query_model(prompt, highlight=True)
+			pprint_color(op)
+			speakTheText(op)
 
 # openAI
 @lru_cache
@@ -3478,6 +3501,22 @@ def createFunctionNameSuggestionPrompt(architecture: str, disassembly: str):
     prompt = PromptTemplate.from_template(function_name_suggestion_prompt)
     return prompt.format(architecture=architecture, disassembly=disassembly)
 
+def speakTheText(text):
+	client = OpenAI(api_key=api_key)
+
+	if text and speak:
+		response = client.audio.speech.create(
+			model="tts-1",
+			voice="nova",
+			input=text,
+		)
+
+		#TODO: stream the audio instead of saving it
+		response.stream_to_file("output.mp3")
+
+		#TODO: remove this hack and use a better way to play audio
+		os.system('afplay /tmp/output.mp3')
+		os.system('rm /tmp/output.mp3')
 
 def __lldb_init_module(debugger, dict):
 	context_title(" polar ")
